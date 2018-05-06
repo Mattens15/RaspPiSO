@@ -1,0 +1,8 @@
+#logfile
+*.log
+
+#objectfile
+*.o
+
+#exe
+*.exe
