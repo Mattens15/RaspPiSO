@@ -6,3 +6,8 @@
 
 #exe
 *.exe
+
+#eseguibili
+server
+camera
+servo
