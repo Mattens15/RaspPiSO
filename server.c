@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <sys/sendfile.h>
 
+#include "camera.c"
+
 char webpage[]=
 "HTTP/1.1 200 Ok\r\n"
 "Content-Type: text/html; charset=UTF-8\r\n\r\n"
@@ -65,6 +67,8 @@ int main(){
             if(!strncmp(buf,"GET /test.jpg",13)){
                 printf("Invio immagine in corso\n");
                 write(fd_client,imageheader,sizeof(imageheader)-1);
+                Capture();
+                
                 fdimg=open("test.jpg",O_RDONLY);
                 int sent=sendfile(fd_client,fdimg,NULL,10000);
                 printf("Inviata %d:",sent);
