@@ -1,0 +1,15 @@
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 0.0.0.0:5900            0.0.0.0:*               LISTEN      424/vncserver-x11-c 
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      454/sshd            
+tcp6       0      0 :::9001                 :::*                    LISTEN      449/java            
+tcp6       0      0 :::5900                 :::*                    LISTEN      424/vncserver-x11-c 
+tcp6       0      0 :::8080                 :::*                    LISTEN      449/java            
+tcp6       0      0 :::22                   :::*                    LISTEN      454/sshd            
+tcp6       0      0 :::1883                 :::*                    LISTEN      449/java            
+udp        0      0 0.0.0.0:68              0.0.0.0:*                           360/dhcpcd          
+udp        0      0 0.0.0.0:51852           0.0.0.0:*                           321/avahi-daemon: r 
+udp        0      0 0.0.0.0:5353            0.0.0.0:*                           321/avahi-daemon: r 
+udp6       0      0 :::48489                :::*                                321/avahi-daemon: r 
+udp6       0      0 :::5683                 :::*                                449/java            
+udp6       0      0 :::5353                 :::*                                321/avahi-daemon: r 
