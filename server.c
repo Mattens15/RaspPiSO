@@ -10,280 +10,392 @@
 #include <errno.h>
 #include <time.h>
 #include <pthread.h>
-#include "camera.h"
-#include "servo.h"
-#include <errno.h>
+#include <signal.h>
+//#include <bcm2835.h>
 
+#define DEFAULT_WIDTH 3280;
+#define DEFAULT_HEIGHT 2464;
+#define SHOOTRATE 15;
+#define SENDINGRATE 20;
+#define PORT 3000
 
-#define DEFAULT_WIDTH 2592;
-#define DEFAULT_HEIGHT 1954;
-#define SHOOTRATE 15; 
+// servo Raoul
+#define PI 180.0
+#define PIN RPI_GPIO_P1_12
+#define CHANNEL 0
+#define RANGE 1024
 
+// thread per la cattura della foto
 pthread_t shooting_loop;
-pthread_t servo_thread;
-char nome_file[100];
+//thread per l'invio della foto
+pthread_t sending_photo;
+// foto da mandare dal momento che non abbiamo una camera 
+char nome_file[100] = "test.jpg";
+int flag = 1;
 
+int photo_sock=0;
+int socket_desc=0;
 
-
-
-typedef struct shooting_args_s{
-  int rate;
+//argomenti necessari per il loop di cattura: frequenza di scatto, larghezza, altezza della foto
+typedef struct shooting_args_s
+{
+  int shooting_rate;
   int w;
   int h;
 } shooting_args_t;
 
-typedef struct servo_args_s{
-  float degrees;
-} servo_args_t;
-
-
-//crating library for control camera from c or c++
-void scatta(int w,int h )// this function capture the image and save it in currentdate.jpg
-{   char w_s[10];
-    char h_s[10];
-    char date[255];
-    time_t rawtime;
-    time(&rawtime);
-    sprintf(date,ctime(&rawtime));
-    char* p=date;
-    for(; *p; ++p){
-        if(*p==" ")
-            *p="";
-    }
-    sprintf(w_s," -w %d ",w);
-    sprintf(h_s,"-h %d ",h);
-    char command[50];
-    strcpy(command,strcat("raspistill -o",strcat(*p,".jpg")));
-    strcat(command,w_s);
-    strcat(command,h_s);
-    printf("%s\n",command);
-    system(command);
-}
-void*sendFotoToclient(int* desc )
+//argomenti necessari per l'invio della foto: frequenza d'invio e descriptor della socket
+typedef struct sending_args_s
 {
-   int connfd=(int)*desc;
-   printf("Connessione accettata e id:%d\n",connfd);
-   printf("Connesso con il client: %s:%d \n",inet_ntoa(c_addr.sin_addr),ntohs(c_addr.sin_port));
-   write(connfd,nome_file,256);
-   FILE *fb=fopen(nome_file,"rb");
-   if(fp==NULL)
-   {
-     printf("Errore apertura file");
-     return 1;
-   }
-   while(1)
-   {
-     /*prima leggiamo trace di 256 byte*/
-     unsigned char buff[10240]={0};
-     int nread=fread(buff,1,10240,fp);
-     printf("Byte letti: %d \n",nread)
-     //se e stato un successo,inviamo i dati
-     if(nread>0)
-        {
-          printf("Sto inviando la foto....\n");
-          write(desc,buff,nread);
+  int sending_rate;
+  int descr;
+} sending_args_t;
 
-        }
-        if(nread <10240)
-        {
-          if(feof(fp))
-          {
-            printf("fine del file\n");
-            printf("Trasferimento del file completato con %d \n",desc);
+// FUNZIONE DI SCATTO CON RASPISTILL
+/* Prendo come parametri larghezza ed altezza della foto da passare come parametri a raspistill;
+   Lancio il comando di scatto e salvo la foto in un file di nome currentdate.jpg con currentdate = data odierna
+*/
+void scatta(int w, int h) {
 
-          }
-          if(ferror(fp))
-             printf("Errore di lettura\n");
-          break;    
-        }
-     /*
-     unsigned char buff[10240]={0};   
-     printf("Sto chiudendo la conessione con id: %d\n",connfd);
-     close(connfd);
-     shutdown(connfd,SHUT_WR)*/
-     sleep(170000);
-     
+  // imposto i parametri larghezza, altezza e currentdate ( mi servirà per nominare il file della foto)
+  char w_s[10];
+  char h_s[10];
+  char date[255];
+  time_t rawtime;
+  time(&rawtime);
+  sprintf(date, "%s",ctime(&rawtime));
+  char *p = date;
+  for (; *p; ++p) {
+    if (*p == ' ')
+      *p = '-';
+  }
 
-   }
+  // scrivo i parametri larghezza e altezza negli array dedicati
+  sprintf(w_s, " -w %d ", w);
+  sprintf(h_s, "-h %d ", h);
+  char command[50];
+
+  // popolo il comando raspistill -> "rapistill -o currentdate.jpg larghezza altezza"
+  strcpy(command, strcat("raspistill -o", strcat(p, ".jpg")));
+  strcat(command, w_s);
+  strcat(command, h_s);
+  printf("%s\n", command);
+
+  // lancio il comando raspistill e catturo la foto
+  //system(command);
 }
 
+// thread di cattura automatica delle foto settata a 'rate' secondi
+void *startLoopCapturingTimer(void *arg) {
 
-void* startLoopCapturingTimer(void* arg) {
-   
-   shooting_args_t* args=(shooting_args_t*) arg;
-   int sec=args->rate;
-   int w=args->w;
-   int h=args->h;
-   while(1)
-   {    
+  // popolamento degli argomenti rate, larghezza e altezza per il ciclo di cattura
+  shooting_args_t *args = (shooting_args_t *)arg;
+  int sec = args->shooting_rate;
+  int w = args->w;
+  int h = args->h;
+  flag = 1;
+  // ciclo while di cattura in cui w,h vengono passati come parametri alla funziona scatta che lancia il comando raspistill
+  while (flag) {
     printf("Sto catturando...\n");
-   	scatta(w,h);
+    //scatta(w,h);
     printf("Ho finito di catturare\n");
     printf("Sleeping...\n");
-   	sleep(sec);
-   }
+    sleep(sec);
+  }
+  pthread_exit(NULL);
 }
 
-int main(int argc,char* argv) {
-  
-  
-  int ret;
+void *sendPhotoToClient(void *arg) {
 
-  int socket_desc,client_sock,c,read_size;
-  struct sockaddr_in server,client;
+  // popolamento degli argomenti rate, socket descriptot per il ciclo d'invio
+  sending_args_t *args = (sending_args_t *)arg;
+  int rate = args->sending_rate;
+  int socket_desc = args->descr;
+
+  struct sockaddr_in client;
+  int c = sizeof(struct sockaddr_in);
+
+  photo_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c);
+  if (photo_sock < 0) {
+    perror("Errore in fase di connessione col client 2");
+    return NULL;
+  }
+  puts("Client connesso con successo");
+
+  // check status connessione
+  printf("Connessione accettata e id:%d\n", photo_sock);
+  //write(desc, nome_file, 256);
+
+  // apertura del file contenente il jpg.
+  while (1) {
+    FILE *fp = fopen(nome_file, "rb");
+    if (fp == NULL) {
+      perror("Errore apertura file");
+      return NULL;
+    }
+    // prima leggiamo tracce di 256 byte
+    unsigned char buff[20000] = {0};
+    int nread = fread(buff, 1, 20000, fp);
+    printf("Byte letti: %d \n", nread);
+
+    //se la lettura è andata a buon fine, inviamo i dati
+    int ret;
+    if (nread > 0) {
+      printf("Sto inviando la foto....\n");
+	    while ( (ret = send(photo_sock, buff, nread, 0)) < 0) {
+          if (errno == EINTR) continue;
+          if(ret == -1) {
+              fprintf(stderr,"Errno on send: %d, Error message: %s\n",errno,strerror(errno));
+              return NULL;
+          }
+      }
+    }
+
+    if (nread < 20000) {
+      if (feof(fp)) {
+        printf("fine del file\n");
+        printf("Bytes letti: %d\n",nread);
+        printf("Bytes inviati: %d\n",ret);
+        printf("Trasferimento del file completato con %d \n", photo_sock);
+      }
+      if (ferror(fp)) {
+        printf("Errore di lettura\n");
+        break;
+      }
+    }
+    /*
+    unsigned char buff[10240]={0};   
+    printf("Sto chiudendo la conessione con id: %d\n",connfd);
+    close(connfd);
+    shutdown(connfd,SHUT_WR)*/
+    sleep(rate);
+  }
+}
+
+/*
+// SERVO RAOUL
+float calculateAngle(float angle,float currentPos){
+	if (currentPos+angle>2*PI){
+		return currentPos+angle-2*PI;
+	}
+	else if(currentPos+angle<0){
+		return currentPos+angle+2*PI;
+	}
+	else{
+		return angle;
+	}
+}
+
+void moveCamera(float angle,float currentPos){
+	//clockwise
+	if (angle>0){
+		bcm2835_pwm_set_data(CHANNEL,110);
+		bcm2835_delayMicroseconds(800000.0*(angle/PI));
+		bcm2835_pwm_set_data(CHANNEL,0);
+		currentPos-=angle; //update position
+	}
+	//counterclockwise
+	else if(angle<0){
+		bcm2835_pwm_set_data(CHANNEL,30);
+		bcm2835_delayMicroseconds(200000.0*(-angle/PI));
+		bcm2835_pwm_set_data(CHANNEL,0);
+		currentPos+=angle; //update position
+	}
+ }
+
+void initGPIO(){
+	if(bcm2835_init()){
+		bcm2835_gpio_fsel(PIN, BCM2835_GPIO_FSEL_ALT5); 	
+		bcm2835_pwm_set_clock(375);
+    	bcm2835_pwm_set_mode(CHANNEL, 1, 1);
+    	bcm2835_pwm_set_range(CHANNEL, RANGE);
+		printf("Servo up and running!\n");}
+	else{
+		printf("Unable to initialize GPIO... Shutting down.\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void closeGPIO(){
+	if(bcm2835_close()){
+		printf("All GPIO connections closed!\n");}
+	else{
+		printf("Unable to close GPIO \n");
+		exit(EXIT_FAILURE);
+	}
+}
+*/
+
+// intercetta segnali di SIGINT in caso fermassi brutalmente il server
+void kill_handler(int sign) {
+  puts("Ricevuto segnale di chiusura, chiudo tutto!");
+  if(photo_sock != 0) close(photo_sock);
+  if(socket_desc != 0) close(socket_desc);
+  exit(1);
+}
+
+int main(int argc, char *argv) {
+  int ret;
+  int client_sock, c, read_size;
+  struct sockaddr_in server, client;
+  // con questo buffer si interagisce con il client
   char client_msg[1024];
+  // con questo buffer invio le foto al client
   char server_msg[10240];
 
-  socket_desc=socket(AF_INET,SOCK_STREAM,0);
-  if(socket_desc==-1){
-    printf("Errore di connessione");
-    exit(1);
+  signal(SIGINT,kill_handler);
+  signal(SIGPIPE,kill_handler);
+  // creo la socket e vedo se la creazione va a buon fine
+  socket_desc = socket(AF_INET, SOCK_STREAM, 0);
+  if (socket_desc == -1) {
+    perror("Errore di connessione");
+    return 1;
   }
   puts("Socket creata con successo");
 
   server.sin_family = AF_INET;
-  server.sin_addr.s_addr = INADDR_ANY;
-  server.sin_port = htons(3000);
+  server.sin_addr.s_addr = INADDR_ANY; // vogliamo accettare connessioni da qualsiasi interfaccia
+  server.sin_port = htons(PORT);       // comunicazione impostata su porta 3000
 
-  if(bind(socket_desc,(struct sockaddr*)&server,sizeof(server))<0){
+  // bind address socket
+  if (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0) {
     perror("Errore di connessione");
     return 1;
   }
-
   puts("Connessione su porta 3000 effettuata correttamente");
 
-  listen(socket_desc,3);
-
+  // mi metto in ascolto del client
+  listen(socket_desc, 3);
   puts("In attesa del client...");
-  c=sizeof(struct sockaddr_in);
+  c = sizeof(struct sockaddr_in);
 
-  client_sock=accept(socket_desc,(struct sockaddr*)&client,(socklen_t*)&c);
-  if(client_sock<0){
-    perror("Errore in fase di connessione col client");
+  client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c);
+  if (client_sock < 0)
+  {
+    perror("Errore in fase di connessione col client 1");
     return 1;
   }
   puts("Client connesso con successo");
 
-  // inizio ad inviare una foto ogni 15 secondi al client alla risluzione di default di 5mpx
-  shooting_args_t* thread_shot_args=malloc(sizeof(shooting_args_t));
-  thread_shot_args->rate=SHOOTRATE;
-  thread_shot_args->w=DEFAULT_WIDTH;
-  thread_shot_args->h=DEFAULT_HEIGHT;
-  ret=pthread_create(&shooting_loop,NULL,startLoopCapturingTimer,(void*)thread_shot_args);
-  if(ret!=0){
+  // inizio a scattare una foto ogni 15 secondi alla risoluzione di default di 8mpx
+  shooting_args_t *thread_shot_args = malloc(sizeof(shooting_args_t));
+  thread_shot_args->shooting_rate = SHOOTRATE;
+  thread_shot_args->w = DEFAULT_WIDTH;
+  thread_shot_args->h = DEFAULT_HEIGHT;
+  ret = pthread_create(&shooting_loop, NULL, startLoopCapturingTimer, (void *)thread_shot_args);
+  if (ret != 0) {
     perror("Errore durante la creazione del thread di cattura della foto");
     return 1;
   }
-  
 
-  while(1){
+  // inizio a mandare le foto al client ogni 20 secondi
+  sending_args_t *sending_photo_args = malloc(sizeof(sending_args_t));
+  sending_photo_args->sending_rate = SENDINGRATE;
+  sending_photo_args->descr = socket_desc;
+  ret = pthread_create(&sending_photo, NULL, sendPhotoToClient, (void *)sending_photo_args);
+  if (ret != 0) {
+    perror("Errore durante la creazione del thread di cattura della foto");
+    return 1;
+  }
 
+  // variabili locali utili per il restart dei thread con arg aggiornati
+  int width;
+  int height;
+  float deg;
+  float current_position = 0;
+
+  while (1) {
     // CAMBIO RISOLUZIONE CAMERA
-    int sended=0;
-    int size_mesg=strlen("Ciao, sono il server! Ogni 15 secondi ti mando una foto a risoluzione di 5mpx. Vuoi modificare la risoluzione? (S/N)\n");
-    char msg[size_mesg];
-    strcpy(msg,"Ciao, sono il server! Ogni 15 secondi ti mando una foto a risoluzione di 5mpx. Vuoi modificare la risoluzione? (S/N)\n",size_mesg)
-    int ret=0;
-    while(sended<size_mesg)
-    {
-     ret=write(client_sock,"Ciao, sono il server! Ogni 15 secondi ti mando una foto a risoluzione di 5mpx. Vuoi modificare la risoluzione? (S/N)\n",strlen("Ciao, sono il server! Ogni 15 secondi ti mando una foto a risoluzione di 5mpx. Vuoi modificare la risoluzione?\n"));
-       if(ret<0)
-       {
-         perror("Errore scrittura sul socket")
-         break;
-       }
-       if(ret==0 && errno==EINTR)
-       {continue;}
-       sended+=ret;
-
-    }  
-    
-    read_size=recv(client_sock,client_msg,1024,0);
-    if(read_size<0){
+    char msg_camera[] = "Ciao, sono il server! Ogni 15 secondi ti mando una foto a risoluzione di 8mpx. Vuoi modificare la risoluzione? (S/N)\n";
+    write(client_sock, msg_camera, strlen(msg_camera));
+    read_size = recv(client_sock, client_msg, 1024, 0);
+    if (read_size < 0) {
       perror("Errore in ricezione dal client");
       return 1;
     }
-    if(*client_msg=="S"){
-      int width;
-      int height;
-      pthread_cancel(shooting_loop);
-      write(client_sock,"Indica larghezza(0-2592)",sizeof("Indica larghezza(0-2592)"));
-      read_size=recv(client_sock,client_msg,1024,0);
-      if(read_size<0){
+    if (!strncmp(client_msg,"S",1)) {
+      // fermo il loop di cattura per potergli dare i nuovi parametri di larghezza e altezza della foto
+      flag = 0;
+      printf("flag a 0");
+      pthread_join(shooting_loop,NULL);
+      char msg_width[] = "Indica larghezza(0-2592)";
+      char msg_height[] = "Indica altezza(0-1954)";
+      write(client_sock, msg_width, strlen(msg_width));
+      read_size = recv(client_sock, client_msg, 1024, 0);
+      if (read_size < 0) {
         perror("Errore in ricezione dal client");
         return 1;
       }
-      width=*client_msg;
-      write(client_sock,"Indica altezza(0-1954)",sizeof("Indica altezza(0-1954)"));
-      read_size=recv(client_sock,client_msg,1024,0);
-      if(read_size<0){
+      width = *client_msg;
+      write(client_sock, msg_height, strlen(msg_height));
+      read_size = recv(client_sock, client_msg, 1024, 0);
+      if (read_size < 0) {
         perror("Errore in ricezione dal client");
         return 1;
       }
-      height=*client_msg;
-      
-      shooting_args_t* thread_shot_args=malloc(sizeof(shooting_args_t));
-      thread_shot_args->rate=SHOOTRATE;
-      thread_shot_args->w=width;
-      thread_shot_args->h=height;
-      ret=pthread_create(&shooting_loop,NULL,startLoopCapturingTimer,(void*)thread_shot_args);
-      if(ret!=0){
+      height = *client_msg;
+
+      shooting_args_t *thread_shot_args = malloc(sizeof(shooting_args_t));
+      thread_shot_args->shooting_rate = SHOOTRATE;
+      thread_shot_args->w = width;
+      thread_shot_args->h = height;
+      ret = pthread_create(&shooting_loop, NULL, startLoopCapturingTimer, (void *)thread_shot_args);
+      if (ret != 0) {
         perror("Errore durante la creazione del thread di cattura della foto");
         return 1;
       }
-      pthread_t thread_invio;
-      ret=pthread_create(&thread_invio,NULL,&sendFotoToclient,&client_sock);
-      if(ret!=0)
-      {
-        perror("Errore durante la creazione del thread di invio foto");
-        return 1;
-      }
     }
-    
+
     // MOVIMENTO SERVO
-    write(client_sock,"Vuoi spostare il servo per orientare la fotocamera? (S/N)\n",strlen("Vuoi spostare il servo per orientare la fotocamera? (S/N)\n"));
-    read_size=recv(client_sock,client_msg,1024,0);
-    if(read_size<0){
+    char msg_servo[] = "Vuoi spostare il servo per orientare la fotocamera? (S/N)\n";
+    write(client_sock, msg_servo, strlen(msg_servo));
+    read_size = recv(client_sock, client_msg, 1024, 0);
+    if (read_size < 0) {
       perror("Errore in ricezione dal client");
       return 1;
     }
-    if(*client_msg=="S"){
-      write(client_sock,"Indica di quanti gradi vuoi spostarti (0-359)\n",strlen("Indica di quanti gradi vuoi spostarti (0-359)\n"));
-      read_size=recv(client_sock,client_msg,1024,0);
-      if(read_size<0){
+    if (!strncmp(client_msg,"S",1)) {
+      ret=pthread_cancel(shooting_loop);
+      puts("quauudiwiqi");
+      char msg_degree[] = "Indica di quanti gradi vuoi spostarti (0-359)\n";
+      write(client_sock, msg_degree, strlen(msg_degree));
+      read_size = recv(client_sock, client_msg, 1024, 0);
+      if (read_size < 0) {
         perror("Errore in ricezione dal client");
         return 1;
       }
-      float dg=atof(*client_msg);
-      servo_args_t* servo_control_args=malloc(sizeof(servo_args_t));
-      servo_control_args->degrees=dg;
-      ret=pthread_create(&servo_thread,NULL,moveCamera,(void*)servo_control_args);
-      if(ret!=0){
-        perror("Errore durante la creazione del thread per il controllo del servo");
-        return 1;
-      }
-      ret=pthread_detach(servo_thread);
+      deg = atof(client_msg);
+      //moveCamera(deg,current_position);
+      current_position += deg;
+      if (current_position > 360)
+        current_position = current_position - 360;
+      /*ret=pthread_detach(servo_thread);
       if(ret!=0){
         perror("Errore in fase di detach del thread servo");
         return 1;
       }
-      ret=pthread_detach(thread_invio);
-      if(ret!=0)
-      {
-        perror("Errore in fase detach del thread invio foto");
+      */
+      shooting_args_t *thread_shot_args = malloc(sizeof(shooting_args_t));
+      thread_shot_args->shooting_rate = SHOOTRATE;
+      thread_shot_args->w = width;
+      thread_shot_args->h = height;
+      ret = pthread_create(&shooting_loop, NULL, startLoopCapturingTimer, (void *)thread_shot_args);
+      if (ret != 0) {
+        perror("Errore durante la creazione del thread di cattura della foto");
+        return 1;
       }
     }
-
-    write(client_sock,"Vuoi terminare la connessione con il server? (S/N)\n",strlen("Vuoi terminare la connessione con il server? (S/N)\n"));
-    read_size=recv(client_sock,client_msg,1024,0);
-    if(read_size<0){
+    char msg_closing[] = "Vuoi terminare la connessione con il server? (S/N)\n";
+    write(client_sock, msg_closing, strlen(msg_closing));
+    read_size = recv(client_sock, client_msg, 1024, 0);
+    if (read_size < 0) {
       perror("Errore in ricezione dal client");
       return 1;
     }
-    if(*client_msg=="S") break;
+    if (!strncmp(client_msg,"S",1)) break;
   }
 
   puts("Connessione con il client terminata!");
+  close(socket_desc);
   return 0;
-    
 }
