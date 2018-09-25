@@ -1,13 +1,14 @@
-all: server.c camera.c servo.c
-		gcc -pthread -o picam server.c camera.c servo.c
+all: server.c client.c
+	gcc -lpthread -o picam server.c 
+	gcc -lpthread -o picamclient client.c
 
 client: client.c 
-	gcc -pthread -o picamclient client.c
+	gcc -lpthread -o picamclient client.c
 
 server: server.c
-	gcc -pthread -o server server.c
+	gcc -lpthread -o picam server.c
 
 
 .PHONY: clean
 clean:
-    rm -f *.o $(objects)
+	rm -f *.o $(objects)
