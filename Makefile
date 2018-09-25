@@ -11,4 +11,4 @@ server: server.c
 
 .PHONY: clean
 clean:
-	rm -f *.o $(objects)
+	rm -f *.o $(objects) picam picamclient
